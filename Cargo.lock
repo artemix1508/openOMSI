@@ -25,6 +25,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aead"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1973cfbc1a2daf9cf550e74e1f088c28e7f7d8c1e1418fb6c9dc5184b7e84c99"
+dependencies = [
+ "crypto-common 0.2.2",
+ "inout",
+]
+
+[[package]]
 name = "aes"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -470,6 +480,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -721,8 +737,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
+ "cipher",
  "cpufeatures 0.3.1",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "chacha20poly1305"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b89e1c441e926b9c82a8d023f6e1b7ae0adcfaa7d621814e4d60789bac751cb"
+dependencies = [
+ "aead",
+ "chacha20",
+ "cipher",
+ "poly1305",
 ]
 
 [[package]]
@@ -1007,7 +1036,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e75b2483e97a5a7da73ac68a05b629f9c53cff58d8ed1c77866079e18b00dba5"
 dependencies = [
  "digest 0.10.7",
- "spin",
+ "spin 0.10.1",
 ]
 
 [[package]]
@@ -1097,6 +1126,33 @@ name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
+
+[[package]]
+name = "curve25519-dalek"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "curve25519-dalek-derive",
+ "digest 0.11.3",
+ "fiat-crypto",
+ "rustc_version",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "curve25519-dalek-derive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "cxx"
@@ -1372,6 +1428,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "ed25519"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
+dependencies = [
+ "signature",
+]
+
+[[package]]
+name = "ed25519-dalek"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519",
+ "sha2 0.11.0",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1546,6 +1624,12 @@ checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
 ]
+
+[[package]]
+name = "fiat-crypto"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
 name = "filetime"
@@ -1756,9 +1840,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1972,6 +2058,15 @@ name = "hexf-parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
+
+[[package]]
+name = "hkdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+dependencies = [
+ "hmac",
+]
 
 [[package]]
 name = "hmac"
@@ -2423,6 +2518,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
+name = "leb128fmt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2453,6 +2554,15 @@ name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
+name = "libmimalloc-sys"
+version = "0.1.49"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "libredox"
@@ -2596,6 +2706,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "mimalloc"
+version = "0.1.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
+dependencies = [
+ "libmimalloc-sys",
 ]
 
 [[package]]
@@ -3197,7 +3316,6 @@ dependencies = [
  "android_logger",
  "anyhow",
  "arboard",
- "block2 0.6.2",
  "clap",
  "ct2rs",
  "env_logger",
@@ -3208,31 +3326,42 @@ dependencies = [
  "jni 0.21.1",
  "libc",
  "log",
+ "mimalloc",
  "ndk-context",
  "objc2 0.6.4",
- "objc2-core-foundation",
- "objc2-foundation 0.3.2",
- "objc2-game-controller",
- "objc2-io-kit",
  "omsi-audio",
+ "omsi-career",
  "omsi-cfg",
  "omsi-content",
  "omsi-geometry",
+ "omsi-guard",
+ "omsi-htmlengine",
+ "omsi-input",
+ "omsi-lan",
+ "omsi-launcher-api",
  "omsi-launcher-core",
+ "omsi-launcher-ui",
  "omsi-map",
  "omsi-model",
  "omsi-net",
  "omsi-o3d",
+ "omsi-photo",
+ "omsi-platform",
  "omsi-plugin",
+ "omsi-plugin-ui",
  "omsi-render",
+ "omsi-scene",
  "omsi-scenery",
  "omsi-script",
  "omsi-sim",
+ "omsi-soundscape",
  "omsi-texture",
  "omsi-timetable",
  "omsi-ui",
  "omsi-vehicle",
- "openxr",
+ "omsi-weather",
+ "omsi-world",
+ "omsi-xr",
  "parking_lot",
  "pollster",
  "rayon",
@@ -3246,7 +3375,6 @@ dependencies = [
  "steamworks",
  "ureq",
  "wgpu",
- "wgpu-hal",
  "windows 0.62.2",
  "winit",
  "winresource",
@@ -3271,12 +3399,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "omsi-career"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "libc",
+ "log",
+ "omsi-cfg",
+ "omsi-content",
+ "omsi-sim",
+ "serde_json",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "omsi-cfg"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
  "flate2",
  "log",
+ "rayon",
  "ring",
  "thiserror 2.0.21",
  "unicode-normalization",
@@ -3331,6 +3474,87 @@ dependencies = [
 ]
 
 [[package]]
+name = "omsi-guard"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "omsi-cfg",
+ "omsi-platform",
+ "serde_json",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "omsi-htmlengine"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "log",
+ "omsi-cfg",
+ "omsi-sim",
+ "omsi-texture",
+]
+
+[[package]]
+name = "omsi-input"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "gilrs",
+ "glam",
+ "libc",
+ "log",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "objc2-game-controller",
+ "objc2-io-kit",
+ "omsi-cfg",
+ "omsi-content",
+ "omsi-script",
+ "omsi-sim",
+ "omsi-vehicle",
+ "windows 0.62.2",
+ "winit",
+]
+
+[[package]]
+name = "omsi-lan"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "hashbrown 0.17.1",
+ "libc",
+ "log",
+ "omsi-cfg",
+ "omsi-map",
+ "omsi-net",
+ "omsi-script",
+ "omsi-sim",
+ "omsi-vehicle",
+ "rayon",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "omsi-launcher-api"
+version = "0.1.0"
+dependencies = [
+ "omsi-cfg",
+ "omsi-launcher-core",
+ "omsi-net",
+ "omsi-platform",
+ "omsi-weather",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "omsi-launcher-core"
 version = "0.1.0"
 dependencies = [
@@ -3352,6 +3576,38 @@ dependencies = [
  "windows 0.62.2",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "omsi-launcher-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "glam",
+ "hashbrown 0.17.1",
+ "image",
+ "libc",
+ "log",
+ "omsi-cfg",
+ "omsi-content",
+ "omsi-guard",
+ "omsi-input",
+ "omsi-lan",
+ "omsi-launcher-core",
+ "omsi-map",
+ "omsi-net",
+ "omsi-platform",
+ "omsi-render",
+ "omsi-sim",
+ "omsi-timetable",
+ "omsi-ui",
+ "omsi-vehicle",
+ "omsi-weather",
+ "serde",
+ "serde_json",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]
@@ -3397,6 +3653,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "omsi-photo"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "omsi-render",
+ "rayon",
+]
+
+[[package]]
+name = "omsi-platform"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "omsi-cfg",
+ "omsi-launcher-core",
+ "serde_json",
+ "sha2 0.10.9",
+ "ureq",
+ "windows 0.62.2",
+ "zip",
+]
+
+[[package]]
 name = "omsi-plugin"
 version = "0.1.0"
 dependencies = [
@@ -3404,6 +3684,24 @@ dependencies = [
  "log",
  "mlua",
  "omsi-cfg",
+ "oop-format",
+ "wasmi",
+]
+
+[[package]]
+name = "omsi-plugin-ui"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "hashbrown 0.17.1",
+ "image",
+ "log",
+ "omsi-cfg",
+ "omsi-plugin",
+ "omsi-render",
+ "omsi-ui",
+ "pollster",
+ "wgpu",
 ]
 
 [[package]]
@@ -3415,6 +3713,7 @@ dependencies = [
  "bytemuck",
  "env_logger",
  "glam",
+ "glow",
  "hashbrown 0.17.1",
  "log",
  "naga",
@@ -3426,6 +3725,40 @@ dependencies = [
  "wgpu",
  "windows 0.62.2",
  "winit",
+]
+
+[[package]]
+name = "omsi-scene"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "hashbrown 0.17.1",
+ "image",
+ "log",
+ "omsi-audio",
+ "omsi-cfg",
+ "omsi-content",
+ "omsi-geometry",
+ "omsi-htmlengine",
+ "omsi-map",
+ "omsi-model",
+ "omsi-o3d",
+ "omsi-render",
+ "omsi-scenery",
+ "omsi-script",
+ "omsi-sim",
+ "omsi-soundscape",
+ "omsi-texture",
+ "omsi-ui",
+ "omsi-vehicle",
+ "omsi-weather",
+ "omsi-world",
+ "parking_lot",
+ "pollster",
+ "rayon",
+ "wgpu",
+ "zip",
 ]
 
 [[package]]
@@ -3451,7 +3784,6 @@ dependencies = [
 name = "omsi-sim"
 version = "0.1.0"
 dependencies = [
- "ab_glyph",
  "anyhow",
  "glam",
  "hashbrown 0.17.1",
@@ -3470,6 +3802,26 @@ dependencies = [
  "omsi-vehicle",
  "parking_lot",
  "rayon",
+]
+
+[[package]]
+name = "omsi-soundscape"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "hashbrown 0.17.1",
+ "log",
+ "omsi-audio",
+ "omsi-cfg",
+ "omsi-geometry",
+ "omsi-map",
+ "omsi-platform",
+ "omsi-scenery",
+ "omsi-sim",
+ "omsi-vehicle",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -3518,6 +3870,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "omsi-weather"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "log",
+ "omsi-cfg",
+ "omsi-content",
+ "omsi-map",
+ "omsi-sim",
+ "omsi-texture",
+]
+
+[[package]]
+name = "omsi-world"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "hashbrown 0.17.1",
+ "log",
+ "omsi-cfg",
+ "omsi-geometry",
+ "omsi-map",
+ "omsi-scenery",
+ "parking_lot",
+ "rayon",
+]
+
+[[package]]
+name = "omsi-xr"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "log",
+ "omsi-cfg",
+ "omsi-render",
+ "openxr",
+ "serde",
+ "serde_json",
+ "wgpu",
+ "wgpu-hal",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3549,6 +3946,22 @@ checksum = "1e68317604e77e53b85896388e1a803c1d21b74c899ec9e5e1112db90735edd7"
 dependencies = [
  "cc",
  "pkg-config",
+]
+
+[[package]]
+name = "oop-format"
+version = "0.1.0"
+source = "git+https://github.com/openOMSI-org/openOMSI-Development-Tools?rev=496d9bd#496d9bd4cf815fb9adaf33a0baa467279d902680"
+dependencies = [
+ "base64 0.23.1",
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "hkdf",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -3756,6 +4169,16 @@ name = "pollster"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
+
+[[package]]
+name = "poly1305"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e2d0073b297041425c7c3df6eb4792d598a15323fe63346852b092eca02904c"
+dependencies = [
+ "cpufeatures 0.3.1",
+ "universal-hash",
+]
 
 [[package]]
 name = "portable-atomic"
@@ -4269,6 +4692,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "ruzstd"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a252f5e20f038fe7b4ea53e073e65398d652c864cc162fc77c56c2f13717b888"
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4373,6 +4802,7 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -4478,6 +4908,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "signature"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4571,6 +5007,12 @@ dependencies = [
 
 [[package]]
 name = "spin"
+version = "0.9.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+
+[[package]]
+name = "spin"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
@@ -4636,6 +5078,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "string-interner"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23de088478b31c349c9ba67816fa55d9355232d63c3afea8bf513e31f0f1d2c0"
+dependencies = [
+ "hashbrown 0.15.5",
+ "serde",
+]
+
+[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4670,12 +5122,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5773a4c030a19d9bfaa090f49746ff35c75dfddfa700df7a5939d5e076a57039"
 dependencies = [
  "lazy_static",
+ "symphonia-bundle-flac",
  "symphonia-bundle-mp3",
  "symphonia-codec-aac",
  "symphonia-codec-vorbis",
  "symphonia-core",
  "symphonia-format-ogg",
  "symphonia-metadata",
+]
+
+[[package]]
+name = "symphonia-bundle-flac"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c91565e180aea25d9b80a910c546802526ffd0072d0b8974e3ebe59b686c9976"
+dependencies = [
+ "log",
+ "symphonia-core",
+ "symphonia-metadata",
+ "symphonia-utils-xiph",
 ]
 
 [[package]]
@@ -5161,6 +5626,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81e544489bf3d8ef66c953931f56617f423cd4b5494be343d9b9d3dda037b9a3"
 
 [[package]]
+name = "universal-hash"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4987bdc12753382e0bec4a65c50738ffaabc998b9cdd1f952fb5f39b0048a96"
+dependencies = [
+ "crypto-common 0.2.2",
+ "ctutils",
+]
+
+[[package]]
 name = "unrar-rs"
 version = "0.10.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5363,6 +5838,99 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81941cd78d0c92026c33e5e01312845a4cb1e9af3407f9134b100dd03144103e"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wasm-encoder"
+version = "0.261.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2608e8bb6d67fd68f5a8d0eb1363d6e7bcbc1f8ded5a0bd3a1e382462b876b22"
+dependencies = [
+ "leb128fmt",
+ "wasmparser 0.261.0",
+]
+
+[[package]]
+name = "wasmi"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78693fcdd618e0fc34af59c6b8efa9ac5d58c68df940beff4bedddb6acfe7c27"
+dependencies = [
+ "spin 0.9.9",
+ "wasmi_collections",
+ "wasmi_core",
+ "wasmi_ir",
+ "wasmparser 0.228.0",
+ "wat",
+]
+
+[[package]]
+name = "wasmi_collections"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a8be2aa467cf2d29e96ff759472c36eeb44a3c81c67fc9cb76c9a24c519c557"
+dependencies = [
+ "string-interner",
+]
+
+[[package]]
+name = "wasmi_core"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69372d5fda3ea3d1e0aa6603c7888110e0187e88ea17cd8fc2e2df0a0e1f37fa"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "wasmi_ir"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f17b774caa13c618c7244f1ee51fe23c5e7b8538a471fa46d9949779758aed6"
+dependencies = [
+ "wasmi_core",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.228.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4abf1132c1fdf747d56bbc1bb52152400c70f336870f968b85e89ea422198ae3"
+dependencies = [
+ "bitflags 2.13.2",
+ "indexmap",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.261.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f20f20e44f7e8aeb6744823ea9d869ede51e51be4fdaedede2852282e54d2d8"
+dependencies = [
+ "bitflags 2.13.2",
+ "indexmap",
+]
+
+[[package]]
+name = "wast"
+version = "261.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "776443145731a4062e5b0d392892a2005909b6ab72d9fdc3cad53dd1a714e44a"
+dependencies = [
+ "bumpalo",
+ "leb128fmt",
+ "memchr",
+ "unicode-width",
+ "wasm-encoder",
+]
+
+[[package]]
+name = "wat"
+version = "1.261.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7b4d1a49ea73a8f3326e74e3a05db667001b16bd1035ed3356fc1a0ed05ca7f"
+dependencies = [
+ "wast",
 ]
 
 [[package]]

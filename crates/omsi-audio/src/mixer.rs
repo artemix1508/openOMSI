@@ -73,6 +73,11 @@ struct Voice {
     cur_gain: f32,
     /// One-pole low-pass filter state, left/right.
     lp: [f32; 2],
+    /// The low-pass was just switched on: it starts from the sound as it is (from the
+    /// state it was left in a while ago, a voice coming into the cab clicked).
+    lp_fresh: bool,
+    /// The bus radio's effects on a stream (see `radio_fx`); None plays it as it is.
+    fx: Option<Box<crate::radio_fx::RadioFx>>,
     /// The Doppler shift: the distance to the listener when the position last came, when,
     /// and the (smoothed) pitch factor it gives.
     doppler: (f32, Option<std::time::Instant>, f32),
@@ -106,13 +111,33 @@ impl Default for Listener {
     }
 }
 
+/// What the game asks of the mixer, taken in at the start of its next block.
+enum Cmd {
+    Play(Box<Voice>),
+    /// New parameters, with the time they were given (for the Doppler shift).
+    Params(VoiceId, VoiceParams, std::time::Instant),
+    Stop(VoiceId),
+    /// The bus radio's effects on a stream voice, with new ones made ready in case it has none.
+    RadioFx(VoiceId, crate::radio_fx::RadioFxParams, Option<Box<crate::radio_fx::RadioFx>>),
+}
+
 struct Shared {
+    /// The voices as the mixer plays them, by rising id (each is put in by the queue, where
+    /// its id is drawn). Only the mixer takes this lock while it plays: it holds it for a
+    /// whole block.
     voices: Mutex<Vec<Voice>>,
-    /// New parameters for voices, taken in by the mixer at the start of its next block
-    /// (with the time they were given, for the Doppler shift). The game sets every voice's
-    /// parameters every frame; through the voice list's lock each of those calls waited
-    /// for a whole block to be mixed.
-    updates: Mutex<Vec<(VoiceId, VoiceParams, std::time::Instant)>>,
+    /// New voices, parameters and stops, taken in by the mixer at the start of its next
+    /// block. The game sets every voice's parameters every frame; through the voice list's
+    /// lock each of those calls waited for a whole block to be mixed.
+    updates: Mutex<Vec<Cmd>>,
+    /// The mixer's half of `updates` (swapped with it each block, so that neither list is
+    /// grown again every block).
+    taken: Mutex<Vec<Cmd>>,
+    /// The voices playing, with the parameters they play with: what the game asks (whether
+    /// a voice still plays, how loud it is - thousands of times a frame) without waiting for
+    /// a block being mixed. Started and stopped voices go in and out at once; the mixer
+    /// takes out those that ended by themselves and puts in the parameters it took in.
+    live: parking_lot::RwLock<HashMap<VoiceId, VoiceParams>>,
     listener: Mutex<Listener>,
     /// The echo of an underpass, fed from the mix.
     reverb: Mutex<Reverb>,
@@ -125,6 +150,40 @@ struct Shared {
     /// `OMSI_MUTE`: everything is mixed as usual (voices play and end), nothing is heard -
     /// for test runs on a machine somebody is working at.
     muted: bool,
+    /// A recording run's clock (see `AudioEngine::capture`): microseconds of mixed sound,
+    /// counted from `epoch`, stand in for the wall clock - the Doppler shift is worked out
+    /// from how far a source moved between two parameter updates, and a run that renders
+    /// slower than real time would otherwise hear every car standing still.
+    capture_us: Option<AtomicU64>,
+    epoch: std::time::Instant,
+}
+
+impl Shared {
+    fn new(rate: u32, channels: usize, muted: bool, capture: bool) -> Shared {
+        Shared {
+            voices: Mutex::new(Vec::new()),
+            updates: Mutex::new(Vec::new()),
+            taken: Mutex::new(Vec::new()),
+            live: Default::default(),
+            listener: Mutex::new(Listener::default()),
+            reverb: Mutex::new(Reverb::default()),
+            limiter: Mutex::new(1.0),
+            sample_rate: AtomicU32::new(rate),
+            channels: AtomicUsize::new(channels),
+            muted,
+            capture_us: capture.then(|| AtomicU64::new(0)),
+            epoch: std::time::Instant::now(),
+        }
+    }
+
+    /// The time parameters are stamped with: the wall clock, or a recording's own.
+    fn now(&self) -> std::time::Instant {
+        match &self.capture_us {
+            Some(us) => self.epoch + std::time::Duration::from_micros(us.load(Ordering::Relaxed)),
+            None => std::time::Instant::now(),
+        }
+    }
+
 }
 
 impl Shared {
@@ -133,16 +192,13 @@ impl Shared {
             *s = 0.0;
         }
         let listener = *self.listener.lock();
-        let updates = std::mem::take(&mut *self.updates.lock());
+        let mut taken = self.taken.lock();
+        std::mem::swap(&mut *taken, &mut *self.updates.lock());
         let mut voices = self.voices.lock();
-        if !updates.is_empty() {
-            let index: HashMap<VoiceId, usize> = voices.iter().enumerate().map(|(k, v)| (v.id, k)).collect();
-            for (id, params, at) in updates {
-                if let Some(&k) = index.get(&id) {
-                    apply_params(&mut voices[k], params, at, listener.position);
-                }
-            }
+        if !taken.is_empty() {
+            self.take_in(&mut voices, &mut taken, listener.position);
         }
+        drop(taken);
         let ch = self.channels.load(Ordering::Relaxed).max(1);
         let frames = out.len() / ch;
         let rate = self.sample_rate.load(Ordering::Relaxed).max(1);
@@ -202,6 +258,9 @@ impl Shared {
                     continue;
                 }
                 let step = buf.rate as f64 / dev_rate;
+                if let Some(fx) = v.fx.as_mut() {
+                    fx.set(fx.params(), rate);
+                }
                 for f in 0..frames {
                     v.cur_gain += (target_gain - v.cur_gain) * 0.005;
                     // silence while the buffer fills (at the start, after a stall)
@@ -209,9 +268,15 @@ impl Shared {
                     let t = v.pos as f32;
                     let (mut l, mut r) = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
                     if v.params.lowpass_hz > 0.0 {
+                        if std::mem::take(&mut v.lp_fresh) {
+                            v.lp = [l, r];
+                        }
                         v.lp[0] += (l - v.lp[0]) * lp_alpha;
                         v.lp[1] += (r - v.lp[1]) * lp_alpha;
                         (l, r) = (v.lp[0], v.lp[1]);
+                    }
+                    if let Some(fx) = v.fx.as_mut() {
+                        (l, r) = fx.process(l, r);
                     }
                     let g = v.cur_gain;
                     out[f * ch] += l * g * left;
@@ -274,6 +339,9 @@ impl Shared {
                     (m, m)
                 };
                 let (l, r) = if v.params.lowpass_hz > 0.0 {
+                    if std::mem::take(&mut v.lp_fresh) {
+                        v.lp = [l, r];
+                    }
                     v.lp[0] += (l - v.lp[0]) * lp_alpha;
                     v.lp[1] += (r - v.lp[1]) * lp_alpha;
                     (v.lp[0], v.lp[1])
@@ -288,7 +356,18 @@ impl Shared {
                 v.pos += step;
             }
         }
-        voices.retain(|v| !v.finished);
+        if voices.iter().any(|v| v.finished) {
+            if crate::trace::on() {
+                let ended: Vec<VoiceId> = voices.iter().filter(|v| v.finished).map(|v| v.id).collect();
+                crate::trace::ended(&ended);
+            }
+            let mut live = self.live.write();
+            for v in voices.iter().filter(|v| v.finished) {
+                live.remove(&v.id);
+            }
+            drop(live);
+            voices.retain(|v| !v.finished);
+        }
         drop(voices);
         if listener.reverb_mix > 0.001 && listener.reverb_time > 0.05 {
             self.reverb.lock().process(out, ch, rate, listener.reverb_time.min(3.0), listener.reverb_mix.min(1.0));
@@ -315,6 +394,64 @@ impl Shared {
     }
 }
 
+impl Shared {
+    /// The game's commands, in the order given, applied to `voices`; the parameters taken
+    /// in published to `live`.
+    fn take_in(&self, voices: &mut Vec<Voice>, cmds: &mut Vec<Cmd>, listener: Vec3) {
+        // (by rising id: a binary search; a voice put in some other way is still found)
+        fn find(voices: &[Voice], id: VoiceId) -> Option<usize> {
+            voices.binary_search_by_key(&id, |v| v.id).ok().or_else(|| voices.iter().position(|v| v.id == id))
+        }
+        let mut live = None;
+        for cmd in cmds.drain(..) {
+            match cmd {
+                Cmd::Play(v) => voices.push(*v),
+                Cmd::Params(id, params, at) => {
+                    if let Some(k) = find(voices, id) {
+                        apply_params(&mut voices[k], params, at, listener);
+                        if let Some(p) = live.get_or_insert_with(|| self.live.write()).get_mut(&id) {
+                            *p = params;
+                        }
+                    }
+                }
+                Cmd::Stop(id) => {
+                    if let Some(k) = find(voices, id) {
+                        voices[k].finished = true;
+                    }
+                }
+                Cmd::RadioFx(id, params, fresh) => {
+                    if let Some(k) = find(voices, id) {
+                        let v = &mut voices[k];
+                        match (v.fx.as_mut(), params.is_off()) {
+                            (_, true) => v.fx = None,
+                            (Some(fx), false) => fx.set(params, self.sample_rate.load(Ordering::Relaxed)),
+                            (None, false) => v.fx = fresh,
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A command for the mixer: queued for its next block, or (with no mixer taking them
+    /// in: an engine without a device) applied to the voices at once.
+    fn send(&self, direct: bool, cmd: Cmd) {
+        if direct {
+            let listener = self.listener.lock().position;
+            let mut one = vec![cmd];
+            self.take_in(&mut self.voices.lock(), &mut one, listener);
+            return;
+        }
+        let mut q = self.updates.lock();
+        // (a game paused while the device stopped calling back must not pile up parameters;
+        // new voices and stops are kept)
+        if q.len() > 4096 {
+            q.retain(|c| !matches!(c, Cmd::Params(..)));
+        }
+        q.push(cmd);
+    }
+}
+
 /// Parameters for voice `v`, given at `now` with the listener at `listener`: the Doppler
 /// shift from how fast the distance to the listener changes (the bus's own sounds move with
 /// the listener and keep their pitch).
@@ -334,6 +471,9 @@ fn apply_params(v: &mut Voice, params: VoiceParams, now: std::time::Instant, lis
         v.doppler = (dist, Some(now), f);
     } else {
         v.doppler = (0.0, None, 1.0);
+    }
+    if params.lowpass_hz > 0.0 && !(v.params.lowpass_hz > 0.0) {
+        v.lp_fresh = true;
     }
     v.params = params;
 }
@@ -383,6 +523,10 @@ pub struct AudioEngine {
     /// Files a background reader is working on (see `clips_ready`).
     loading: Arc<Mutex<hashbrown::HashSet<PathBuf>>>,
     pub enabled: bool,
+    /// Mixed on demand, for a recording (see [`AudioEngine::capture`]).
+    capture: bool,
+    /// Mixed never (see [`AudioEngine::silent`]): the voices are kept as they are told.
+    silent: bool,
 }
 
 fn muted() -> bool {
@@ -392,7 +536,8 @@ fn muted() -> bool {
 /// Read and decode a clip (any thread).
 pub fn read_clip(path: &Path) -> Option<Arc<Clip>> {
     let bytes = omsi_cfg::vfs::read(path).ok()?;
-    match crate::wav::parse_wav(&bytes) {
+    let compressed = bytes.starts_with(b"OggS") || bytes.starts_with(b"fLaC") || crate::wav::is_mp3(&bytes);
+    let clip = match if compressed { crate::wav::parse_compressed(&bytes) } else { crate::wav::parse_wav(&bytes) } {
         Ok(w) => Some(Arc::new(Clip {
             sample_rate: w.sample_rate,
             channels: w.channels,
@@ -402,7 +547,11 @@ pub fn read_clip(path: &Path) -> Option<Arc<Clip>> {
             log::warn!("{}: {e}", path.display());
             None
         }
+    };
+    if let Some(c) = &clip {
+        crate::trace::clip_read(Arc::as_ptr(c) as usize, path);
     }
+    clip
 }
 
 /// Every two seconds, the name of the system's default output device: when it is not the
@@ -426,41 +575,76 @@ impl AudioEngine {
     /// An engine without a device: clips load and voices are kept, nothing is mixed or
     /// heard - for tools that look at sound configurations.
     pub fn silent() -> AudioEngine {
+        crate::trace::engine("silent");
         AudioEngine {
             stream: std::cell::RefCell::new(None),
             device: std::cell::RefCell::new(String::new()),
             reopen: Arc::new(AtomicBool::new(false)),
             opened: std::cell::Cell::new(std::time::Instant::now()),
-            shared: Arc::new(Shared {
-                voices: Mutex::new(Vec::new()),
-                updates: Mutex::new(Vec::new()),
-                listener: Mutex::new(Listener::default()),
-                reverb: Mutex::new(Reverb::default()),
-                limiter: Mutex::new(1.0),
-                sample_rate: AtomicU32::new(48_000),
-                channels: AtomicUsize::new(2),
-                muted: true,
-            }),
+            shared: Arc::new(Shared::new(48_000, 2, true, false)),
             next_id: AtomicU64::new(1),
             clips: Default::default(),
             last_trim: Mutex::new(std::time::Instant::now()),
             loading: Default::default(),
             enabled: true,
+            capture: false,
+            silent: true,
         }
+    }
+
+    /// An engine that plays on no device and is mixed on demand ([`AudioEngine::render_capture`]):
+    /// a recording run writes the sound of the same simulated time as its pictures, however
+    /// long a picture takes. Clips are read at once (a background read would leave the
+    /// first seconds silent), and the clock of the parameters is the mixed sound's own.
+    pub fn capture(rate: u32) -> AudioEngine {
+        crate::trace::engine("capture");
+        AudioEngine {
+            stream: std::cell::RefCell::new(None),
+            device: std::cell::RefCell::new(String::new()),
+            reopen: Arc::new(AtomicBool::new(false)),
+            opened: std::cell::Cell::new(std::time::Instant::now()),
+            shared: Arc::new(Shared::new(rate.max(8000), 2, false, true)),
+            next_id: AtomicU64::new(1),
+            clips: Default::default(),
+            last_trim: Mutex::new(std::time::Instant::now()),
+            loading: Default::default(),
+            enabled: true,
+            capture: true,
+            silent: false,
+        }
+    }
+
+    /// A capture engine's next `frames` frames of the mix (stereo, interleaved), with the
+    /// parameters given since the last call. Nothing on an engine playing on a device.
+    pub fn render_capture(&self, frames: usize) -> Vec<f32> {
+        let Some(us) = self.shared.capture_us.as_ref() else {
+            return Vec::new();
+        };
+        let mut out = vec![0.0f32; frames * 2];
+        crate::trace::mixed(frames);
+        self.shared.render(&mut out);
+        let rate = self.shared.sample_rate.load(Ordering::Relaxed).max(1) as u64;
+        us.fetch_add(frames as u64 * 1_000_000 / rate, Ordering::Relaxed);
+        out
+    }
+
+    /// The time the engine goes by: the wall clock, or a recording's own (the mixed sound's,
+    /// see [`AudioEngine::capture`]) - a sound's fade-in by the seconds it has played
+    /// (`[volcurve] -1`) is heard in a recording as it is in the game, however long the
+    /// pictures take to draw.
+    pub fn clock(&self) -> std::time::Instant {
+        self.shared.now()
+    }
+
+    /// The device's (or the capture's) sample rate.
+    pub fn sample_rate(&self) -> u32 {
+        self.shared.sample_rate.load(Ordering::Relaxed)
     }
 
     /// Open the default output device. Returns a silent engine if none is available.
     pub fn new() -> AudioEngine {
-        let shared = Arc::new(Shared {
-            voices: Mutex::new(Vec::new()),
-            updates: Mutex::new(Vec::new()),
-            listener: Mutex::new(Listener::default()),
-            reverb: Mutex::new(Reverb::default()),
-            limiter: Mutex::new(1.0),
-            sample_rate: AtomicU32::new(48_000),
-            channels: AtomicUsize::new(2),
-            muted: muted(),
-        });
+        crate::trace::engine("device");
+        let shared = Arc::new(Shared::new(48_000, 2, muted(), false));
         let reopen = Arc::new(AtomicBool::new(false));
         let engine = AudioEngine {
             stream: std::cell::RefCell::new(None),
@@ -473,6 +657,8 @@ impl AudioEngine {
             last_trim: Mutex::new(std::time::Instant::now()),
             loading: Default::default(),
             enabled: false,
+            capture: false,
+            silent: false,
         };
         let enabled = engine.open_default();
         let engine = AudioEngine { enabled, ..engine };
@@ -603,6 +789,12 @@ impl AudioEngine {
         if !self.enabled {
             return true;
         }
+        if self.capture {
+            for p in paths {
+                self.load_clip(p);
+            }
+            return true;
+        }
         let missing: Vec<PathBuf> = {
             let mut clips = self.clips.lock();
             let now = std::time::Instant::now();
@@ -673,8 +865,8 @@ impl AudioEngine {
     }
 
     fn play_at(&self, clip: Arc<Clip>, params: VoiceParams, start: f64) -> VoiceId {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.shared.voices.lock().push(Voice {
+        let trace_clip = Arc::as_ptr(&clip) as usize;
+        self.start_voice(Some(trace_clip), params, start, |id| Voice {
             id,
             clip,
             stream: None,
@@ -683,16 +875,40 @@ impl AudioEngine {
             finished: false,
             cur_gain: 0.0,
             lp: [0.0, 0.0],
+            lp_fresh: false,
+            fx: None,
             doppler: (0.0, None, 1.0),
-        });
+        })
+    }
+
+    /// A new voice given its id (drawn under the queue's lock, so that the mixer's list
+    /// stays in the order of the ids) and handed to the mixer; playing from now on.
+    fn start_voice(&self, trace_clip: Option<usize>, params: VoiceParams, start: f64, voice: impl FnOnce(VoiceId) -> Voice) -> VoiceId {
+        if self.direct() {
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            crate::trace::play(id, trace_clip, &params, start);
+            self.shared.live.write().insert(id, params);
+            self.shared.send(true, Cmd::Play(Box::new(voice(id))));
+            return id;
+        }
+        // (the queue's lock held from the id to the push)
+        let mut q = self.shared.updates.lock();
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        crate::trace::play(id, trace_clip, &params, start);
+        self.shared.live.write().insert(id, params);
+        q.push(Cmd::Play(Box::new(voice(id))));
         id
+    }
+
+    /// No mixer takes the commands in: an engine without a device (see [`AudioEngine::silent`]).
+    fn direct(&self) -> bool {
+        !self.enabled || self.silent
     }
 
     /// Play what `stream` is fed with (see `stream::StreamBuf`); the voice ends when the
     /// stream is closed.
     pub fn play_stream(&self, stream: Arc<crate::stream::StreamBuf>, params: VoiceParams) -> VoiceId {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.shared.voices.lock().push(Voice {
+        self.start_voice(None, params, 0.0, |id| Voice {
             id,
             clip: Arc::new(Clip { sample_rate: 44100, channels: 2, samples: Vec::new() }),
             stream: Some(stream),
@@ -701,56 +917,53 @@ impl AudioEngine {
             finished: false,
             cur_gain: 0.0,
             lp: [0.0, 0.0],
+            lp_fresh: false,
+            fx: None,
             doppler: (0.0, None, 1.0),
-        });
-        id
+        })
+    }
+
+    /// The bus radio's effects on stream voice `id` (see `radio_fx`): made, retuned, or
+    /// done away with when all of them are 0.
+    pub fn set_radio_fx(&self, id: VoiceId, params: crate::radio_fx::RadioFxParams) {
+        crate::trace::radio_fx(id, &params);
+        let rate = self.shared.sample_rate.load(Ordering::Relaxed);
+        // (made here, should the voice have none yet: the mixer's thread allocates nothing)
+        let fresh = if params.is_off() { None } else { crate::radio_fx::RadioFx::new(params, rate).map(Box::new) };
+        self.shared.send(self.direct(), Cmd::RadioFx(id, params, fresh));
     }
 
     /// New parameters for a voice: queued for the mixer's next block (a few milliseconds),
     /// so the game never waits for a block being mixed. Given twice before that block, the
     /// later ones win.
     pub fn set_params(&self, id: VoiceId, params: VoiceParams) {
+        crate::trace::set(id, &params);
         // (no device, no mixer to take them in: straight onto the voice)
-        if !self.enabled {
-            let listener = self.shared.listener.lock().position;
-            if let Some(v) = self.shared.voices.lock().iter_mut().find(|v| v.id == id) {
-                apply_params(v, params, std::time::Instant::now(), listener);
-            }
-            return;
-        }
-        let mut q = self.shared.updates.lock();
-        // (a game paused while the device stopped calling back must not pile them up)
-        if q.len() > 4096 {
-            q.clear();
-        }
-        q.push((id, params, std::time::Instant::now()));
+        self.shared.send(self.direct(), Cmd::Params(id, params, self.shared.now()));
     }
 
     /// What a voice plays with now, and how loud it arrives at the listener (gain after
     /// distance), while it plays.
+    /// (from the voices' published states: never waits for a block being mixed)
     pub fn voice_state(&self, id: VoiceId) -> Option<(VoiceParams, f32)> {
-        let listener = *self.shared.listener.lock();
-        let voices = self.shared.voices.lock();
-        let v = voices.iter().find(|v| v.id == id && !v.finished)?;
-        let spatial = v
-            .params
+        let params = *self.shared.live.read().get(&id)?;
+        let listener = self.shared.listener.lock().position;
+        let spatial = params
             .position
-            .map(|p| distance_gain(v.params.range, (p - listener.position).length()))
+            .map(|p| distance_gain(params.range, (p - listener).length()))
             .unwrap_or(1.0);
-        Some((v.params, v.params.gain * spatial))
+        Some((params, params.gain * spatial))
     }
 
+    /// (from the voices' published states: never waits for a block being mixed)
     pub fn is_playing(&self, id: VoiceId) -> bool {
-        self.shared
-            .voices
-            .lock()
-            .iter()
-            .any(|v| v.id == id && !v.finished)
+        self.shared.live.read().contains_key(&id)
     }
 
     pub fn stop(&self, id: VoiceId) {
-        if let Some(v) = self.shared.voices.lock().iter_mut().find(|v| v.id == id) {
-            v.finished = true;
+        crate::trace::stop(id);
+        if self.shared.live.write().remove(&id).is_some() {
+            self.shared.send(self.direct(), Cmd::Stop(id));
         }
     }
 
@@ -759,11 +972,13 @@ impl AudioEngine {
     }
 
     pub fn set_listener(&self, l: Listener) {
+        crate::trace::listener(&l);
         *self.shared.listener.lock() = l;
     }
 
+    /// The voices playing.
     pub fn voice_count(&self) -> usize {
-        self.shared.voices.lock().len()
+        self.shared.live.read().len()
     }
 }
 
@@ -772,8 +987,7 @@ mod tests {
     use super::*;
 
     fn shared() -> Shared {
-        Shared { voices: Mutex::new(Vec::new()), updates: Mutex::new(Vec::new()), listener: Mutex::new(Listener::default()),
-                        reverb: Mutex::new(Reverb::default()), limiter: Mutex::new(1.0), sample_rate: AtomicU32::new(48_000), channels: AtomicUsize::new(1), muted: false }
+        Shared::new(48_000, 1, false, false)
     }
 
     fn voice(clip: Arc<Clip>, gain: f32) -> Voice {
@@ -786,6 +1000,8 @@ mod tests {
             finished: false,
             cur_gain: gain,
             lp: [0.0; 2],
+            lp_fresh: false,
+            fx: None,
             doppler: (0.0, None, 1.0),
         }
     }
@@ -806,7 +1022,7 @@ mod tests {
         let clip = Arc::new(Clip { sample_rate: 48_000, channels: 1, samples: vec![16_384; 5] });
         let s = shared();
         s.voices.lock().push(voice(clip, 1.0));
-        s.updates.lock().push((1, VoiceParams { gain: 0.0, looping: true, ..Default::default() }, std::time::Instant::now()));
+        s.updates.lock().push(Cmd::Params(1, VoiceParams { gain: 0.0, looping: true, ..Default::default() }, std::time::Instant::now()));
         let mut out = vec![0.0f32; 4];
         s.render(&mut out);
         assert_eq!(s.voices.lock()[0].params.gain, 0.0);
@@ -827,6 +1043,18 @@ mod tests {
         }
         assert_eq!(own.doppler.2, 1.0);
         assert!(passing.doppler.2 < 1.0);
+    }
+
+    /// A recording's clock is the sound it mixed, not the wall clock: a fade-in by seconds
+    /// played comes out the same however slowly the run goes.
+    #[test]
+    fn a_recording_goes_by_the_sound_it_mixed() {
+        let e = AudioEngine::capture(48_000);
+        let t0 = e.clock();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(e.clock(), t0);
+        e.render_capture(24_000);
+        assert_eq!(e.clock() - t0, std::time::Duration::from_millis(500));
     }
 
     /// The stream opened again (as when the system's output device changed) keeps playing;
@@ -853,6 +1081,119 @@ mod tests {
         v.params.range = 1.0e6;
         v.params.doppler = false;
         v
+    }
+
+    /// A capture engine mixes on demand, with its own clock.
+    #[test]
+    fn a_capture_mixes_voices_on_demand() {
+        let e = AudioEngine::capture(48_000);
+        let clip = Arc::new(Clip { sample_rate: 48_000, channels: 1, samples: vec![8_192; 4_800] });
+        e.play(clip, VoiceParams { gain: 1.0, looping: true, ..Default::default() });
+        let t0 = e.shared.now();
+        let a = e.render_capture(4_800);
+        assert_eq!(a.len(), 9_600);
+        assert!((e.shared.now() - t0).as_millis() == 100, "the clock moves with the sound");
+        assert!(a[2000..].iter().all(|x| (*x - 0.25).abs() < 0.01));
+        assert!(AudioEngine::new_for_test_device_less().render_capture(10).is_empty());
+    }
+
+    /// What the game asks and tells a voice never waits for a block being mixed (the mixer
+    /// holds the voices a whole block); a voice that ended by itself is gone once mixed, one
+    /// stopped at once.
+    #[test]
+    fn the_game_never_waits_for_the_mixer() {
+        let e = AudioEngine::capture(48_000);
+        let clip = Arc::new(Clip { sample_rate: 48_000, channels: 1, samples: vec![8_192; 480] });
+        let short = e.play(clip.clone(), VoiceParams::default());
+        let looped = e.play(clip.clone(), VoiceParams { looping: true, ..Default::default() });
+        e.render_capture(4_800);
+        assert!(!e.is_playing(short) && e.is_playing(looped) && e.voice_count() == 1);
+        // (a block being mixed: the voices held for half a second)
+        let (shared, (tx, rx)) = (e.shared.clone(), std::sync::mpsc::channel());
+        let mixer = std::thread::spawn(move || {
+            let _mixing = shared.voices.lock();
+            tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        });
+        rx.recv().unwrap();
+        let t = std::time::Instant::now();
+        e.set_params(looped, VoiceParams { gain: 0.5, looping: true, ..Default::default() });
+        let other = e.play(clip, VoiceParams::default());
+        e.set_radio_fx(other, Default::default());
+        let asked = (e.is_playing(looped), e.voice_state(looped).map(|s| s.1), e.is_playing(other));
+        e.stop(other);
+        assert!(t.elapsed() < std::time::Duration::from_millis(250), "the game waited for the mixer");
+        assert_eq!((asked, e.is_playing(other)), ((true, Some(1.0), true), false));
+        mixer.join().unwrap();
+        e.render_capture(480);
+        assert_eq!(e.voice_state(looped).map(|s| s.1), Some(0.5));
+        assert_eq!(e.shared.voices.lock().len(), 1);
+    }
+
+    impl AudioEngine {
+        fn new_for_test_device_less() -> AudioEngine {
+            AudioEngine::silent()
+        }
+    }
+
+    /// A stream with its effects all at 0 plays exactly as one never given any; with the
+    /// speaker on it does not.
+    #[test]
+    fn a_stream_with_no_effects_is_bit_identical() {
+        let render = |fx: Option<crate::radio_fx::RadioFxParams>| {
+            let e = AudioEngine::capture(48_000);
+            let buf = Arc::new(crate::stream::StreamBuf::default());
+            buf.push(48_000, (0..48_000 * 3).map(|i| {
+                let t = i as f32 / 48_000.0;
+                [(t * 440.0 * std::f32::consts::TAU).sin() * 0.5, (t * 660.0 * std::f32::consts::TAU).sin() * 0.4]
+            }));
+            let id = e.play_stream(buf, VoiceParams { gain: 0.8, ..Default::default() });
+            if let Some(p) = fx {
+                e.set_radio_fx(id, p);
+            }
+            e.render_capture(48_000 * 2)
+        };
+        let plain = render(None);
+        assert!(plain.iter().any(|x| x.abs() > 0.1));
+        let off = render(Some(Default::default()));
+        assert!(plain.iter().zip(&off).all(|(a, b)| a.to_bits() == b.to_bits()));
+        let speaker = render(Some(crate::radio_fx::RadioFxParams { speaker: 1.0, ..Default::default() }));
+        assert!(plain.iter().zip(&speaker).any(|(a, b)| (a - b).abs() > 0.01));
+    }
+
+    /// The one-pole low-pass of a voice heard through the bodywork: a 5 kHz tone through
+    /// 500 Hz comes out some 20 dB down, a 100 Hz one hardly touched.
+    #[test]
+    fn the_voice_low_pass_follows_its_corner() {
+        let level = |hz: f32| {
+            let n = 48_000usize;
+            let samples: Vec<i16> = (0..n).map(|i| ((i as f32 / 48_000.0 * hz * std::f32::consts::TAU).sin() * 16_000.0) as i16).collect();
+            let clip = Arc::new(Clip { sample_rate: 48_000, channels: 1, samples });
+            let s = shared();
+            let mut v = voice(clip, 1.0);
+            v.params.lowpass_hz = 500.0;
+            v.params.looping = false;
+            s.voices.lock().push(v);
+            let mut out = vec![0.0f32; n];
+            s.render(&mut out);
+            let tail = &out[n / 2..];
+            (tail.iter().map(|x| x * x).sum::<f32>() / tail.len() as f32).sqrt() / (16_000.0 / 32_768.0 / 2f32.sqrt())
+        };
+        let high = 20.0 * level(5_000.0).log10();
+        assert!((high + 20.0).abs() < 1.5, "{high} dB");
+        assert!(level(100.0) > 0.97);
+    }
+
+    #[test]
+    fn a_low_pass_switched_on_starts_from_the_sound() {
+        let mut v = voice(Arc::new(Clip { sample_rate: 48_000, channels: 1, samples: vec![0; 4] }), 1.0);
+        v.lp = [0.7, -0.7];
+        apply_params(&mut v, VoiceParams { lowpass_hz: 800.0, ..Default::default() }, std::time::Instant::now(), Vec3::ZERO);
+        assert!(v.lp_fresh);
+        apply_params(&mut v, VoiceParams { lowpass_hz: 0.0, ..Default::default() }, std::time::Instant::now(), Vec3::ZERO);
+        let mut w = voice(Arc::new(Clip { sample_rate: 48_000, channels: 1, samples: vec![0; 4] }), 1.0);
+        apply_params(&mut w, VoiceParams { lowpass_hz: 0.0, ..Default::default() }, std::time::Instant::now(), Vec3::ZERO);
+        assert!(!w.lp_fresh);
     }
 
     #[test]

@@ -71,6 +71,9 @@ impl Offscreen<'_> {
                     );
                 }
             }
+            if let Some(stats) = t.stats.as_ref() {
+                log::info!("{}", stats.summary());
+            }
             log::info!("traffic: {} vehicles ({buses} of them buses), {} waiting at red lights, mean speed {:.1} km/h", t.cars.len(), t.held_at_red, t.cars.iter().map(|c| c.state.speed).sum::<f32>() / t.cars.len().max(1) as f32 * 3.6);
             for c in t.cars.iter().filter(|c| c.is_bus()) {
                 log::info!("scheduled {} at ({:.1}, {:.1}, {:.1}) heading {:.0} speed {:.1} km/h, {} stops left, at_station={} dwell={:.1} delay={:+.0} s", c.vehicle.ty.def.type_name, c.vehicle.position.x, c.vehicle.position.y, c.vehicle.position.z, c.vehicle.heading, c.state.speed * 3.6, c.bus.as_ref().map(|b| b.stops.len()).unwrap_or(0), c.at_station(), c.standing_for(t.day_time), c.bus.as_ref().map(|b| b.delay).unwrap_or(0.0));
@@ -183,7 +186,7 @@ impl Offscreen<'_> {
             }
         }
         {
-            let e = DRIVE_EXTREMES.lock();
+            let e = &self.drive_extremes;
             log::info!("drive extremes: pitch {:.1} (at ({:.1}, {:.1}, {:.1}), {:.1} s) bank {:.1}, origin {:+.2}..{:+.2} m over the ground", e.0, e.4 .0.x, e.4 .0.y, e.4 .0.z, e.4 .1, e.1, e.3, e.2);
         }
         if let Some(list) = omsi_cfg::flags::OMSI_DEBUG_VARS.var() {

@@ -25,8 +25,11 @@ use std::path::{Path, PathBuf};
 
 pub mod codepage;
 pub mod flags;
+pub mod lang;
 mod keywords;
 pub mod number;
+pub mod par;
+pub mod panic_guard;
 pub mod vfs;
 pub mod install_search;
 pub use install_search::find_original_install;
@@ -469,7 +472,8 @@ fn name_key(name: &str) -> String {
 }
 
 type Listing = std::sync::Arc<std::collections::HashMap<String, std::ffi::OsString>>;
-static LISTINGS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, Listing>>> = std::sync::OnceLock::new();
+// (read far more often than added to, by the loaders side by side: a lock for readers)
+static LISTINGS: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<PathBuf, Listing>>> = std::sync::OnceLock::new();
 /// Bumped whenever content may have come or gone (a root added or taken away, a mod
 /// installed while the game runs): the caches of what is where start afresh.
 static CONTENT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -479,7 +483,7 @@ static CONTENT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 pub fn content_changed() {
     CONTENT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     if let Some(l) = LISTINGS.get() {
-        l.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        l.write().unwrap_or_else(|e| e.into_inner()).clear();
     }
 }
 
@@ -491,8 +495,8 @@ pub fn content_generation() -> u64 {
 
 /// The entries of a directory by [`name_key`], listed once.
 fn dir_listing(dir: &Path) -> Listing {
-    let cache = LISTINGS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    if let Some(l) = cache.lock().unwrap().get(dir) {
+    let cache = LISTINGS.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+    if let Some(l) = cache.read().unwrap().get(dir) {
         return l.clone();
     }
     let mut map = std::collections::HashMap::new();
@@ -508,7 +512,7 @@ fn dir_listing(dir: &Path) -> Listing {
         }
     }
     let l = std::sync::Arc::new(map);
-    cache.lock().unwrap().insert(dir.to_path_buf(), l.clone());
+    cache.write().unwrap().insert(dir.to_path_buf(), l.clone());
     l
 }
 
@@ -826,6 +830,13 @@ pub fn resolve_path(base: &Path, rel: &str) -> PathBuf {
             cur.pop();
             continue;
         }
+        // the folder's listing, kept from the first time, has the name spelled just so:
+        // the path as asked for, which the file system would only confirm (a look on the
+        // disk for every component of every path was most of a lookup's time)
+        if dir_listing(&cur).get(&name_key(comp)).is_some_and(|n| n.as_os_str() == std::ffi::OsStr::new(comp)) {
+            cur.push(comp);
+            continue;
+        }
         let direct = cur.join(comp);
         if vfs::exists(&direct) {
             cur = direct;
@@ -995,6 +1006,32 @@ pub fn is_writable(dir: &Path) -> bool {
     let ok = std::fs::write(&probe, b"x").is_ok();
     let _ = std::fs::remove_file(&probe);
     ok
+}
+
+/// The game's own content folder, where it writes what it makes (drivers, saves, journeys):
+/// `OMSI_CONTENT`, else the content folder beside the program (beside an .app bundle) when it
+/// may be written, else `~/.openomsi/content`.
+pub fn content_dir() -> Option<PathBuf> {
+    if let Some(d) = crate::flags::OMSI_CONTENT.os() {
+        return Some(PathBuf::from(d));
+    }
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.to_path_buf();
+    // inside an .app bundle the binary sits in Contents/MacOS: use the folder beside the bundle
+    let dir = if dir.ends_with("Contents/MacOS") {
+        dir.parent()?.parent()?.parent()?.to_path_buf()
+    } else {
+        dir
+    };
+    let cand = content_folder_of(&dir);
+    if !is_programs_folder(&cand) && (cand.exists() || std::fs::create_dir_all(&cand).is_ok()) && is_writable(&cand) {
+        Some(cand)
+    } else {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+        let fallback = PathBuf::from(home).join(".openomsi").join("content");
+        let _ = ensure_content_layout(&fallback);
+        Some(fallback)
+    }
 }
 
 /// Create the content folder layout at `dir` (idempotent).

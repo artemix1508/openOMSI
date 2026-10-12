@@ -54,6 +54,8 @@ public class OmsiActivity extends NativeActivity {
         }
         immersive();
         askForStorage();
+        // the launcher page over the window (the desktop launcher's, see LauncherBridge)
+        LauncherBridge.attach(this);
         // started by the package installer after an update: nothing more to do
         Intent i = getIntent();
         if (i != null && ACTION_INSTALLED.equals(i.getAction())) {
@@ -249,7 +251,7 @@ public class OmsiActivity extends NativeActivity {
             case PackageInstaller.STATUS_FAILURE_CONFLICT:
             case PackageInstaller.STATUS_FAILURE_INCOMPATIBLE:
                 // signed with another key than the installed app (a build of one's own)
-                installMessage = "this openOMSI was installed from a build with another signature than the GitHub releases. Uninstall it once and install the APK from github.com/openOMSI-Project/openOMSI - updates work from then on.";
+                installMessage = "this openOMSI was installed from a build with another signature than the GitHub releases. Uninstall it once and install the APK from github.com/openOMSI-org/openOMSI - updates work from then on.";
                 installStatus = 4;
                 break;
             default: {

@@ -58,27 +58,33 @@ impl PeopleSim {
     /// Everybody on foot on the ground, for the traffic to stop for: position, velocity
     /// and whether they wait at a stop (a bus pulls up right beside those).
     pub fn on_foot(&self) -> Vec<(DVec3, DVec2, bool)> {
-        self.people
-            .iter()
-            .filter(|p| p.place == Place::Ground)
-            .map(|p| {
-                let waiting = matches!(&p.state, State::Pax(x) if x.inside.is_none());
-                (p.position, p.vel, waiting)
-            })
-            .collect()
+        let mut out = Vec::new();
+        self.on_foot_into(&mut out);
+        out
+    }
+
+    /// `on_foot` into a list kept from frame to frame (the traffic asks every frame).
+    pub fn on_foot_into(&self, out: &mut Vec<(DVec3, DVec2, bool)>) {
+        out.clear();
+        out.extend(self.people.iter().filter(|p| p.place == Place::Ground).map(|p| {
+            let waiting = matches!(&p.state, State::Pax(x) if x.inside.is_none());
+            (p.position, p.vel, waiting)
+        }));
     }
 
     pub fn strollers(&self) -> Vec<(usize, f32)> {
-        self.people
-            .iter()
-            .filter_map(|p| match &p.state {
-                State::Strolling(walk) => walk
-                    .legs
-                    .get(walk.leg)
-                    .map(|leg| (leg.lane, leg.dist(walk.s))),
-                _ => None,
-            })
-            .collect()
+        let mut out = Vec::new();
+        self.strollers_into(&mut out);
+        out
+    }
+
+    /// `strollers` into a list kept from frame to frame (the traffic asks every frame).
+    pub fn strollers_into(&self, out: &mut Vec<(usize, f32)>) {
+        out.clear();
+        out.extend(self.people.iter().filter_map(|p| match &p.state {
+            State::Strolling(walk) => walk.legs.get(walk.leg).map(|leg| (leg.lane, leg.dist(walk.s))),
+            _ => None,
+        }));
     }
 
     /// Report the waiting and alighting passengers to the bus script, the way OMSI does.
@@ -116,6 +122,28 @@ impl PeopleSim {
             }
         }
         (alighting, waiting)
+    }
+
+    /// How full each timetable bus is: passengers aboard over its places (seats and
+    /// standing), for the departure displays. Only buses whose cabin is known.
+    pub fn bus_loads(&self) -> HashMap<u64, f32> {
+        let mut aboard: HashMap<u64, usize> = HashMap::new();
+        for p in &self.people {
+            if let State::Pax(x) = &p.state {
+                if let Some(BusId::Ai(id)) = x.inside {
+                    *aboard.entry(id).or_insert(0) += 1;
+                }
+            }
+        }
+        self.seats
+            .iter()
+            .filter_map(|(id, places)| match id {
+                BusId::Ai(id) if !places.is_empty() => {
+                    Some((*id, (aboard.get(id).copied().unwrap_or(0) as f32 / places.len() as f32).min(1.0)))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Timetable buses to hold at their stop, for the traffic.
@@ -208,6 +236,9 @@ impl PeopleSim {
                 "; {:.2} ms a frame, longest {worst:.1} ms",
                 total / n as f64
             ));
+            if !self.stage_stats.0.is_empty() {
+                out.push_str(&format!("; stages avg/longest ms: {}", self.stage_stats.line(n)));
+            }
         }
         out
     }
