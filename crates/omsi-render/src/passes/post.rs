@@ -184,6 +184,29 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&[width as f32, height as f32, sharpen.clamp(0.0, 0.8), if f.vanilla_fxaa { 1.0 } else { 0.0 }]),
             );
+            // FSR 1: EASU draws the picture at the window's size into its own target, which
+            // the pass below sharpens (RCAS) on its way to the window
+            let mut src = (&self.scale.upscale_pipeline, bg);
+            if let Some((mid_view, mid_bg)) = &f.fsr_target {
+                let mut easu = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("fsr easu"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: mid_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                easu.set_pipeline(&self.scale.easu_pipeline);
+                easu.set_bind_group(0, bg, &[]);
+                easu.draw(0..3, 0..1);
+                drop(easu);
+                src = (&self.scale.rcas_pipeline, mid_bg);
+            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("upscale"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -200,8 +223,8 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.scale.upscale_pipeline);
-            pass.set_bind_group(0, bg, &[]);
+            pass.set_pipeline(src.0);
+            pass.set_bind_group(0, src.1, &[]);
             pass.draw(0..3, 0..1);
             if !overlays.is_empty() {
                 pass.set_pipeline(&self.overlay_pipeline_1x);

@@ -236,6 +236,9 @@ pub struct RenderOptions {
     /// The 3D picture of the window drawn at this fraction of its size and scaled up
     /// (0.5..1); 0 = automatic: full size up to `AUTO_SCALE_PIXELS`, smaller above.
     pub render_scale: f32,
+    /// The render scale's picture is upscaled by AMD FSR 1 (EASU + RCAS) instead of the
+    /// built-in Catmull-Rom + sharpen filter.
+    pub fsr: bool,
     /// Uncompressed texture files (BMP, TGA, JPG) are compressed to BC1/BC3 on loading
     /// where the device takes block formats and the result is close to the picture
     /// (DXT files always go up as blocks there).
@@ -291,6 +294,7 @@ impl Default for RenderOptions {
             shadow_size: SHADOW_SIZE,
             ssao: true,
             render_scale: 0.0,
+            fsr: false,
             compress_textures: true,
             gpu_texture_compression: true,
             fxaa: true,

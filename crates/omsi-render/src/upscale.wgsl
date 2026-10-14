@@ -199,3 +199,173 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     return vec4<f32>(col, 1.0);
 }
+
+// ---------------------------------------------------------------------------------------
+// FSR 1 (AMD FidelityFX Super Resolution 1.0, MIT licence): EASU upscales the render-scale
+// picture to the window's size into an intermediate target, RCAS sharpens that on its way
+// to the window (`fs_easu`, `fs_rcas`; used instead of `fs_main` when the Upscaler setting
+// says FSR 1). Both expect perceptual values, so the picture's linear ones are taken
+// through a gamma 2.0 curve (a square root) and back. Ported to WGSL from ffx_fsr1.h
+// (FsrEasuF, FsrRcasF); the `p.src.z` sharpening (0..0.8) sets RCAS's strength.
+// ---------------------------------------------------------------------------------------
+fn gather_r(uv: vec2<f32>) -> vec4<f32> {
+    return sqrt(max(textureGather(0, t_src, s_src, uv), vec4<f32>(0.0)));
+}
+
+fn gather_g(uv: vec2<f32>) -> vec4<f32> {
+    return sqrt(max(textureGather(1, t_src, s_src, uv), vec4<f32>(0.0)));
+}
+
+fn gather_b(uv: vec2<f32>) -> vec4<f32> {
+    return sqrt(max(textureGather(2, t_src, s_src, uv), vec4<f32>(0.0)));
+}
+
+// accumulate the gradient direction and length of one of the four bilinear quadrants
+fn easu_set(dir: ptr<function, vec2<f32>>, len: ptr<function, f32>, w: f32, la: f32, lb: f32, lc: f32, ld: f32, le: f32) {
+    let len_x0 = max(abs(ld - lc), abs(lc - lb));
+    let rcp_x = 1.0 / max(len_x0, 1e-8);
+    let dir_x = ld - lb;
+    (*dir).x = (*dir).x + dir_x * w;
+    var len_x = clamp(abs(dir_x) * rcp_x, 0.0, 1.0);
+    len_x = len_x * len_x;
+    *len = *len + len_x * w;
+    let len_y0 = max(abs(le - lc), abs(lc - la));
+    let rcp_y = 1.0 / max(len_y0, 1e-8);
+    let dir_y = le - la;
+    (*dir).y = (*dir).y + dir_y * w;
+    var len_y = clamp(abs(dir_y) * rcp_y, 0.0, 1.0);
+    len_y = len_y * len_y;
+    *len = *len + len_y * w;
+}
+
+// one tap of the (lanczos-2-like) kernel, rotated to the edge direction
+fn easu_tap(ac: ptr<function, vec3<f32>>, aw: ptr<function, f32>, off: vec2<f32>, dir: vec2<f32>, len: vec2<f32>, lob: f32, clp: f32, c: vec3<f32>) {
+    var v = vec2<f32>(off.x * dir.x + off.y * dir.y, off.x * (-dir.y) + off.y * dir.x);
+    v = v * len;
+    let d2 = min(v.x * v.x + v.y * v.y, clp);
+    var wb = 0.4 * d2 - 1.0;
+    var wa = lob * d2 - 1.0;
+    wb = wb * wb;
+    wa = wa * wa;
+    wb = 1.5625 * wb - 0.5625;
+    let w = wb * wa;
+    *ac = *ac + c * w;
+    *aw = *aw + w;
+}
+
+@fragment
+fn fs_easu(in: VsOut) -> @location(0) vec4<f32> {
+    let size = p.src.xy;
+    let inv = 1.0 / size;
+    // the position of 'f' in the picture, and where the output pixel sits inside its texel
+    var pp = in.uv * size - 0.5;
+    let fp = floor(pp);
+    pp = pp - fp;
+    // 12-tap kernel, read as four gathers:   b c / e f g h / i j k l / n o
+    let p0 = fp * inv + vec2<f32>(inv.x, -inv.y);
+    let p1 = p0 + vec2<f32>(-inv.x, 2.0 * inv.y);
+    let p2 = p0 + vec2<f32>(inv.x, 2.0 * inv.y);
+    let p3 = p0 + vec2<f32>(0.0, 4.0 * inv.y);
+    let bczz_r = gather_r(p0);
+    let bczz_g = gather_g(p0);
+    let bczz_b = gather_b(p0);
+    let ijfe_r = gather_r(p1);
+    let ijfe_g = gather_g(p1);
+    let ijfe_b = gather_b(p1);
+    let klhg_r = gather_r(p2);
+    let klhg_g = gather_g(p2);
+    let klhg_b = gather_b(p2);
+    let zzon_r = gather_r(p3);
+    let zzon_g = gather_g(p3);
+    let zzon_b = gather_b(p3);
+    // luma times two
+    let bczz_l = bczz_b * 0.5 + (bczz_r * 0.5 + bczz_g);
+    let ijfe_l = ijfe_b * 0.5 + (ijfe_r * 0.5 + ijfe_g);
+    let klhg_l = klhg_b * 0.5 + (klhg_r * 0.5 + klhg_g);
+    let zzon_l = zzon_b * 0.5 + (zzon_r * 0.5 + zzon_g);
+    let b_l = bczz_l.x;
+    let c_l = bczz_l.y;
+    let i_l = ijfe_l.x;
+    let j_l = ijfe_l.y;
+    let f_l = ijfe_l.z;
+    let e_l = ijfe_l.w;
+    let k_l = klhg_l.x;
+    let l_l = klhg_l.y;
+    let h_l = klhg_l.z;
+    let g_l = klhg_l.w;
+    let o_l = zzon_l.z;
+    let n_l = zzon_l.w;
+    // edge direction and strength, accumulated over the four bilinear quadrants
+    var dir = vec2<f32>(0.0);
+    var len = 0.0;
+    easu_set(&dir, &len, (1.0 - pp.x) * (1.0 - pp.y), b_l, e_l, f_l, g_l, j_l);
+    easu_set(&dir, &len, pp.x * (1.0 - pp.y), c_l, f_l, g_l, h_l, k_l);
+    easu_set(&dir, &len, (1.0 - pp.x) * pp.y, f_l, i_l, j_l, k_l, n_l);
+    easu_set(&dir, &len, pp.x * pp.y, g_l, j_l, k_l, l_l, o_l);
+    // normalise the direction (a flat area gets 1, 0)
+    let dir2 = dir * dir;
+    var dir_r = dir2.x + dir2.y;
+    let zro = dir_r < (1.0 / 32768.0);
+    dir_r = inverseSqrt(max(dir_r, 1.0 / 32768.0));
+    dir_r = select(dir_r, 1.0, zro);
+    dir.x = select(dir.x, 1.0, zro);
+    dir = dir * dir_r;
+    len = len * 0.5;
+    len = len * len;
+    // stretch the kernel along an edge, shift the lobe with the amount of edge
+    let stretch = (dir.x * dir.x + dir.y * dir.y) / max(max(abs(dir.x), abs(dir.y)), 1e-8);
+    let len2 = vec2<f32>(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
+    let lob = 0.5 + ((0.25 - 0.04) - 0.5) * len;
+    let clp = 1.0 / lob;
+    // the four nearest texels bound the result (no ringing)
+    let f_c = vec3<f32>(ijfe_r.z, ijfe_g.z, ijfe_b.z);
+    let g_c = vec3<f32>(klhg_r.w, klhg_g.w, klhg_b.w);
+    let j_c = vec3<f32>(ijfe_r.y, ijfe_g.y, ijfe_b.y);
+    let k_c = vec3<f32>(klhg_r.x, klhg_g.x, klhg_b.x);
+    let min4 = min(min(min(f_c, g_c), j_c), k_c);
+    let max4 = max(max(max(f_c, g_c), j_c), k_c);
+    var ac = vec3<f32>(0.0);
+    var aw = 0.0;
+    easu_tap(&ac, &aw, vec2<f32>(0.0, -1.0) - pp, dir, len2, lob, clp, vec3<f32>(bczz_r.x, bczz_g.x, bczz_b.x)); // b
+    easu_tap(&ac, &aw, vec2<f32>(1.0, -1.0) - pp, dir, len2, lob, clp, vec3<f32>(bczz_r.y, bczz_g.y, bczz_b.y)); // c
+    easu_tap(&ac, &aw, vec2<f32>(-1.0, 1.0) - pp, dir, len2, lob, clp, vec3<f32>(ijfe_r.x, ijfe_g.x, ijfe_b.x)); // i
+    easu_tap(&ac, &aw, vec2<f32>(0.0, 1.0) - pp, dir, len2, lob, clp, j_c); // j
+    easu_tap(&ac, &aw, vec2<f32>(0.0, 0.0) - pp, dir, len2, lob, clp, f_c); // f
+    easu_tap(&ac, &aw, vec2<f32>(-1.0, 0.0) - pp, dir, len2, lob, clp, vec3<f32>(ijfe_r.w, ijfe_g.w, ijfe_b.w)); // e
+    easu_tap(&ac, &aw, vec2<f32>(1.0, 1.0) - pp, dir, len2, lob, clp, k_c); // k
+    easu_tap(&ac, &aw, vec2<f32>(2.0, 1.0) - pp, dir, len2, lob, clp, vec3<f32>(klhg_r.y, klhg_g.y, klhg_b.y)); // l
+    easu_tap(&ac, &aw, vec2<f32>(2.0, 0.0) - pp, dir, len2, lob, clp, vec3<f32>(klhg_r.z, klhg_g.z, klhg_b.z)); // h
+    easu_tap(&ac, &aw, vec2<f32>(1.0, 0.0) - pp, dir, len2, lob, clp, g_c); // g
+    easu_tap(&ac, &aw, vec2<f32>(1.0, 2.0) - pp, dir, len2, lob, clp, vec3<f32>(zzon_r.z, zzon_g.z, zzon_b.z)); // o
+    easu_tap(&ac, &aw, vec2<f32>(0.0, 2.0) - pp, dir, len2, lob, clp, vec3<f32>(zzon_r.w, zzon_g.w, zzon_b.w)); // n
+    let pix = min(max4, max(min4, ac / max(aw, 1e-8)));
+    return vec4<f32>(pix * pix, 1.0);
+}
+
+fn rcas_px(sp: vec2<i32>, dims: vec2<i32>) -> vec3<f32> {
+    return sqrt(max(textureLoad(t_src, clamp(sp, vec2<i32>(0), dims - vec2<i32>(1)), 0).rgb, vec3<f32>(0.0)));
+}
+
+@fragment
+fn fs_rcas(in: VsOut) -> @location(0) vec4<f32> {
+    let dims = vec2<i32>(textureDimensions(t_src));
+    let sp = vec2<i32>(in.clip.xy);
+    //   b
+    // d e f
+    //   h
+    let b = rcas_px(sp + vec2<i32>(0, -1), dims);
+    let d = rcas_px(sp + vec2<i32>(-1, 0), dims);
+    let e = rcas_px(sp, dims);
+    let f = rcas_px(sp + vec2<i32>(1, 0), dims);
+    let h = rcas_px(sp + vec2<i32>(0, 1), dims);
+    let mn4 = min(min(min(b, d), f), h);
+    let mx4 = max(max(max(b, d), f), h);
+    let hit_min = min(mn4, e) / max(4.0 * mx4, vec3<f32>(1e-5));
+    let hit_max = (vec3<f32>(1.0) - max(mx4, e)) / min(4.0 * mn4 - vec3<f32>(4.0), vec3<f32>(-1e-5));
+    let lobe3 = max(-hit_min, hit_max);
+    // sharpness in stops of halving: the smaller the picture, the nearer to full strength
+    let stops = mix(1.5, 0.2, clamp(p.src.z / 0.8, 0.0, 1.0));
+    let lobe = max(-0.1875, min(max(max(lobe3.x, lobe3.y), lobe3.z), 0.0)) * exp2(-stops);
+    let pix = (lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0);
+    return vec4<f32>(pix * pix, 1.0);
+}

@@ -40,6 +40,7 @@ pub(super) fn options_pages(app: &App) -> Vec<Page> {
         preset_row(&file, "Quality preset", "Sets most of the graphics options at once"),
         pick("msaa", "Anti-aliasing", later),
         pick("render_scale", "Render scale", later),
+        pick("upscaler", "Upscaler", "How a render scale below 100% is scaled up: FSR 1 is crisper but harsher on edges, so keep anti-aliasing on"),
         pick("anisotropy", "Anisotropic", later),
         // (Enhanced+ traces its shadows, occlusion and reflections: always on there)
         switch_row(app, "shadows", "Sun shadows", "Enables/Disabled shadows").filter(|_| !app.settings.ray_tracing()),

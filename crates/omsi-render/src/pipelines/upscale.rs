@@ -6,6 +6,9 @@ pub(crate) struct Upscale {
     pub upscale_pipeline: wgpu::RenderPipeline,
     pub copy_pipeline: wgpu::RenderPipeline,
     pub panel_pipeline: wgpu::RenderPipeline,
+    /// FSR 1: EASU into an intermediate target, RCAS on its way to the window.
+    pub easu_pipeline: wgpu::RenderPipeline,
+    pub rcas_pipeline: wgpu::RenderPipeline,
     pub layout: wgpu::BindGroupLayout,
     pub buf: wgpu::Buffer,
 }
@@ -35,6 +38,8 @@ pub(crate) fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Upsca
     let upscale_pipeline = upscale_pipeline_for("fs_main");
     let copy_pipeline = upscale_pipeline_for("fs_copy");
     let panel_pipeline = upscale_pipeline_for("fs_panel");
+    let easu_pipeline = upscale_pipeline_for("fs_easu");
+    let rcas_pipeline = upscale_pipeline_for("fs_rcas");
     let upscale_buf = uniform_buffer(device, "upscale params", 16);
-    Upscale { upscale_pipeline, copy_pipeline, panel_pipeline, layout: upscale_layout, buf: upscale_buf }
+    Upscale { upscale_pipeline, copy_pipeline, panel_pipeline, easu_pipeline, rcas_pipeline, layout: upscale_layout, buf: upscale_buf }
 }

@@ -517,6 +517,9 @@ pub(crate) struct Upscale {
     pub(crate) copy_pipeline: wgpu::RenderPipeline,
     /// Triple screen: a panel's picture copied 1:1 to its place in the window.
     pub(crate) panel_pipeline: wgpu::RenderPipeline,
+    /// FSR 1 (the Upscaler setting): EASU into a window-sized target, then RCAS to the window.
+    pub(crate) easu_pipeline: wgpu::RenderPipeline,
+    pub(crate) rcas_pipeline: wgpu::RenderPipeline,
     pub(crate) upscale_layout: wgpu::BindGroupLayout,
     pub(crate) upscale_buf: wgpu::Buffer,
     /// The game's frame-rate governor on top of the render scale (1 = none; see

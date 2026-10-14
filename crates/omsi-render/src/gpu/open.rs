@@ -519,6 +519,8 @@ impl Renderer {
                 upscale_pipeline: upscale.upscale_pipeline,
                 copy_pipeline: upscale.copy_pipeline,
                 panel_pipeline: upscale.panel_pipeline,
+                easu_pipeline: upscale.easu_pipeline,
+                rcas_pipeline: upscale.rcas_pipeline,
                 upscale_layout: upscale.layout,
                 upscale_buf: upscale.buf,
                 dynamic_scale: std::cell::Cell::new(1.0),

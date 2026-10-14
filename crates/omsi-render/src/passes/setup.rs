@@ -96,6 +96,11 @@ impl Renderer {
         } else {
             None
         };
+        let fsr_target = if with_overlays && self.options.fsr && scene_target.is_some() && (width, height) != (full_w, full_h) {
+            Some(self.scale_target(full_w, full_h))
+        } else {
+            None
+        };
         let aspect = self.texture_aspect.unwrap_or(width as f32 / height.max(1) as f32);
         let cam_rel = (camera.position - ro).as_vec3();
         // The mirrors are drawn with the plain shading even in Enhanced: without the depth
@@ -195,6 +200,7 @@ impl Renderer {
             glass_on,
             scaled,
             scene_target,
+            fsr_target,
             aspect,
             cam_rel,
             xr_view,

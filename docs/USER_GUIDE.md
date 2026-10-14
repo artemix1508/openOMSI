@@ -372,7 +372,8 @@ own, and drives on from the others once boarding is done; off by default: it wai
 stop it serves, as in OMSI),
 `boarding`, `detail_textures`, `exact_fare`, `enhanced`, `fullscreen`, `vsync`, `volume`
 and `drive_keys`, plus `render_scale` (`auto` or a fraction: the picture is drawn smaller
-and upscaled), `post_aa` (`fxaa`, the enhanced renderer's, or `off`), `view_distance` (m,
+and upscaled), `upscaler` (`classic`, or `fsr1` for AMD FSR 1 on the scaled picture),
+`post_aa` (`fxaa`, the enhanced renderer's, or `off`), `view_distance` (m,
 how far the tiles are kept loaded), `texture_memory` (MB - OMSI's `texmemlimit` is read
 under that name too; an eighth of the machine's memory when unset), `texture_compression`
 (loose pictures compressed to BC1-BC3 on loading, on by default), `gpu_texture_compression`

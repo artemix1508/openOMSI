@@ -135,6 +135,8 @@ pub(crate) struct FrameCtx<'a> {
     pub glass_on: bool,
     pub scaled: bool,
     pub scene_target: Option<(wgpu::TextureView, wgpu::BindGroup)>,
+    /// FSR 1: the window-sized target EASU draws into and RCAS reads
+    pub fsr_target: Option<(wgpu::TextureView, wgpu::BindGroup)>,
     pub aspect: f32,
     pub cam_rel: Vec3,
     pub xr_view: bool,
