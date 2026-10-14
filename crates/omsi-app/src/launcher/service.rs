@@ -11,7 +11,7 @@
 //! A phone runs the launcher's page inside the game program itself: there the same service
 //! runs on a thread of its own (`in_process`), asked through a channel instead of a pipe.
 
-use super::showroom::{Look, Showroom};
+use super::showroom::{Look, PreviewView, Showroom};
 use omsi_render::Renderer;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
@@ -54,7 +54,6 @@ fn write(out: &Out, id: &Value, mut head: Value, body: &[u8]) {
 /// `openomsi --launcher-service`: requests on stdin, answers on stdout.
 pub fn run() -> anyhow::Result<()> {
     super::install();
-    crate::launcher_statics();
     let out: Out = Arc::new(Mutex::new(answers()));
     let reply: Reply = Arc::new(move |id, head, body| write(&out, id, head, body));
     let (tx, rx) = std::sync::mpsc::channel::<Value>();
@@ -159,6 +158,9 @@ fn serve(rx: std::sync::mpsc::Receiver<Value>, reply: Reply) {
                 if zoom != 1.0 {
                     showroom.zoom_by(zoom);
                 }
+                if let Some(view) = req.get("view").and_then(Value::as_str).and_then(PreviewView::from_name) {
+                    showroom.set_view(view);
+                }
                 if renderer.is_none() {
                     match open_renderer() {
                         Ok(r) => renderer = Some(r),
@@ -175,7 +177,7 @@ fn serve(rx: std::sync::mpsc::Receiver<Value>, reply: Reply) {
                 let before = showroom.drawn;
                 let (w, h) = (f("w", 960.0) as u32, f("h", 540.0) as u32);
                 let _ = showroom.preview(r, w, h);
-                let head = json!({ "ok": true, "busy": showroom.busy, "failed": showroom.failed(), "error": showroom.error, "moving": showroom.moving(), "picture": showroom.has_picture() });
+                let head = json!({ "ok": true, "busy": showroom.busy, "failed": showroom.failed(), "error": showroom.error, "moving": showroom.moving(), "picture": showroom.has_picture(), "view": showroom.view.name(), "views": showroom.views() });
                 let new = showroom.drawn != before || req.get("force").and_then(Value::as_bool).unwrap_or(false);
                 match (new, showroom.picture()) {
                     (true, Some(tex)) => {
@@ -192,11 +194,15 @@ fn serve(rx: std::sync::mpsc::Receiver<Value>, reply: Reply) {
                 let (map, date, trip) = (s("map"), s("date"), s("trip"));
                 std::thread::spawn(move || {
                     let global = omsi_cfg::find_in_roots(&map).map(|(_, p)| p).or_else(|| omsi_launcher_lib::content_path(&map).ok()).unwrap_or_else(|| PathBuf::from(&map));
-                    let v = omsi_launcher_ui::mapview::export(&map, &global, &date, &trip, 0.6);
+                    let v = omsi_launcher_model::mapview::export(&map, &global, &date, &trip, 0.6);
                     out(&id, json!({ "ok": true }), v.to_string().as_bytes());
                 });
             }
             "pads" => pads.ask(req, reply.clone()),
+            "key_actions" => {
+                let out = reply.clone();
+                std::thread::spawn(move || out(&id, json!({ "ok": true }), super::key_actions::key_actions(&req).to_string().as_bytes()));
+            }
             "quit" => break,
             other => send(&id, json!({ "ok": false, "error": format!("unknown command {other}") }), &[]),
         }
